@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -30,11 +31,12 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 type WorkerStruct struct {
-	Pid      int
-	Filename string
-	mapf     func(string, string) []KeyValue
-	reducef  func(string, []string) string
-	nReduce  int
+	Pid           int
+	Filename      string
+	mapf          func(string, string) []KeyValue
+	reducef       func(string, []string) string
+	nReduce       int
+	currentTaskId int
 }
 
 //
@@ -47,36 +49,94 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func (worker *WorkerStruct) executeMapTask() {
+var logger *logr.Logger
+
+func (worker *WorkerStruct) checkAllMapTaskFinish() bool {
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("Checking if all the map tasks are finished")
+
+	args := CheckAllMapTaskFinishArgs{}
+	reply := CheckAllMapTaskFinishReply{}
+
+	call("Coordinator.CheckAllMapTaskFinish", &args, &reply)
+
+	if !reply.AllTaskFinish {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+		}).Info("There are some map tasks still unfinished")
+	} else {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+		}).Info("All map tasks in coordinator are finish")
+	}
+	return reply.AllTaskFinish
+}
+
+func (worker *WorkerStruct) getTaskFromCoordinator() bool {
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("Try to get map task from coordinator")
+
+	getMapTaskArgs := GetMapTaskArgs{worker.Pid}
+	getMapTaskReply := GetMapTaskReply{}
+
+	call("Coordinator.GetMapTask", &getMapTaskArgs, &getMapTaskReply)
+
+	if getMapTaskReply.GetTask {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+			"Filename": getMapTaskReply.Filename,
+			"TaskId":   getMapTaskReply.TaskId,
+		}).Info("Get map task from coordinator")
+		worker.currentTaskId = getMapTaskReply.TaskId
+		worker.Filename = getMapTaskReply.Filename
+	} else {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+		}).Info("Failed to get map task from coordinator")
+	}
+
+	return getMapTaskReply.GetTask
+}
+
+func (worker *WorkerStruct) executeMapTask() []string {
 	file, err := os.Open(worker.Filename)
 	if err != nil {
-		logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": worker.Filename}).Error("Failed to open file")
-		return
+		logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": worker.Filename}).Error("Failed to open file")
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
-		logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": worker.Filename}).Error("Failed to read file")
-		return
+		logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": worker.Filename}).Error("Failed to read file")
 	}
 	file.Close()
-	logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": worker.Filename}).Info("Successfully read from file, start to execute map task")
-	keyValues := worker.mapf(worker.Filename, string(content))
-	logr.WithFields(logr.Fields{"Pid": worker.Pid}).Info("Successfully execute the map task, start to write the output to intermediate files")
-	sort.Sort(ByKey(keyValues))
-	worker.writeMapResultToFile(keyValues)
+	logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": worker.Filename}).Info("Successfully read from file, start to execute map task")
 
+	keyValues := worker.mapf(worker.Filename, string(content))
+	logr.WithFields(logr.Fields{"WorkerId": worker.Pid}).Info("Successfully execute the map task, start to write the output to intermediate files")
+
+	sort.Sort(ByKey(keyValues))
+	return worker.writeMapResultToFile(keyValues)
 }
 
-func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) {
-	intermediateFiles := []string{}
+func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string {
+	intermediateFileNames := []string{}
+	intermediateFiles := []*os.File{}
 	for i := 0; i < worker.nReduce; i++ {
-		intermediateFiles = append(intermediateFiles, "mp-intermedia-"+strconv.Itoa(worker.Pid)+"-"+strconv.Itoa(i))
+		filename := "mp-intermedia-" + strconv.Itoa(worker.currentTaskId) + "-" + strconv.Itoa(i)
+		intermediateFileNames = append(intermediateFileNames, filename)
+		fileWriter, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			logr.WithFields(logr.Fields{"Filename": filename}).Error("Fail to open file")
+			return nil
+		} else {
+			intermediateFiles = append(intermediateFiles, fileWriter)
+		}
 	}
-	logr.WithFields(logr.Fields{"Pid": worker.Pid, "Files": intermediateFiles}).Info("Intermedia files for map task")
+	logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Files": intermediateFileNames}).Info("Intermedia files for map task")
+
 	totalSize := len(keyValues)
 	currentFileIdx := 0
-	writeIdxForCurFile := 0
-	lengthForEachFile := totalSize / worker.nReduce
 	tempStr := ""
 	for i := 0; i < totalSize; {
 		j := i
@@ -84,27 +144,70 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) {
 			tempStr = tempStr + fmt.Sprintf("%v %v\n", keyValues[j].Key, keyValues[j].Value)
 		}
 		tempStr = tempStr + fmt.Sprintf("%v %v\n", keyValues[j].Key, keyValues[j].Value)
-		if (j - writeIdxForCurFile) >= lengthForEachFile {
-			err := ioutil.WriteFile(intermediateFiles[currentFileIdx], []byte(tempStr), fs.ModePerm)
-			if err != nil {
-				logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": intermediateFiles[currentFileIdx]}).Error("Failed to write map output to this file")
-			} else {
-				logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": intermediateFiles[currentFileIdx]}).Info("Write map intermediate output tot this file")
-			}
-			tempStr = ""
-			currentFileIdx++
-			writeIdxForCurFile = j
+		fileIdx := ihash(keyValues[j].Key) % worker.nReduce
+		fileWriter := intermediateFiles[fileIdx]
+		_, err := fileWriter.Write([]byte(tempStr))
+		if err != nil {
+			logr.Error(err)
+			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
+		} else {
+			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Info("Write map intermediate output tot this file")
 		}
+		tempStr = ""
 		i = j + 1
 	}
+
 	if tempStr != "" {
-		err := ioutil.WriteFile(intermediateFiles[currentFileIdx], []byte(tempStr), fs.ModePerm)
+		err := ioutil.WriteFile(intermediateFileNames[currentFileIdx], []byte(tempStr), fs.ModePerm)
 		if err != nil {
-			logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": intermediateFiles[currentFileIdx]}).Error("Failed to write map output to this file")
+			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
 		} else {
-			logr.WithFields(logr.Fields{"Pid": worker.Pid, "Filename": intermediateFiles[currentFileIdx]}).Info("Write map intermediate output tot this file")
+			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Info("Write map intermediate output tot this file")
 		}
 	}
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("All data in map task is written into files")
+
+
+	for _, writer := range intermediateFiles {
+		writer.Close()
+	}
+	return intermediateFileNames
+}
+
+func (worker *WorkerStruct) reportMapTaskFinish(intermediaFiles []string) {
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+		"TaskId":   worker.currentTaskId,
+	}).Info("All content in current map task is finish, report to the coordinator")
+
+	args := ReportMapTaskFinishArgs{
+		worker.Pid,
+		worker.currentTaskId,
+		worker.Filename,
+		intermediaFiles,
+	}
+	reply := ReportMapTaskFinishReply{}
+
+	call("Coordinator.ReportMapTaskFinish", &args, &reply)
+
+	if reply.TaskAccept {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+			"TaskId":   worker.currentTaskId,
+		}).Info("A map task is accepted")
+	} else {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+			"TaskId":   worker.currentTaskId,
+		}).Info("A map task is not accepted, delete the intermedia files")
+
+		for _, intermediaFile := range intermediaFiles {
+			os.Remove(intermediaFile)
+		}
+	}
+	worker.currentTaskId = -1
 }
 
 //
@@ -113,56 +216,41 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	pid := unix.Getpid()
-	registerMapArgs := RegisterMapWorkerArgs{pid}
-	registerMapReply := RegisterMapWorkerReply{}
+
+	registerMapArgs := RegisterWorkerArgs{pid}
+	registerMapReply := RegisterWorkerReply{}
+
 	logr.WithFields(logr.Fields{
-		"Pid": pid,
+		"WorkerId": pid,
 	}).Info("Try to register map worker with pid")
-	ok := call("Coordinator.RegisterMapWorker", &registerMapArgs, &registerMapReply)
+	ok := call("Coordinator.RegisterWorker", &registerMapArgs, &registerMapReply)
 	if !ok {
 		logr.Error("Fail to make rpc call")
 		return
 	}
+
 	logr.WithFields(logr.Fields{
-		"Pid":      pid,
-		"Filename": registerMapReply.Filename,
+		"WorkerId": pid,
 		"NReduce":  registerMapReply.NReduce,
-	}).Info("Successfully register reduce, get input filename, start to create worker")
-	if registerMapReply.NReduce <= 0 || registerMapReply.Filename == "" {
-		logr.WithFields(logr.Fields{"NReduce": registerMapReply.NReduce, "Filename": registerMapReply.Filename}).Error("Invalid params")
+	}).Info("Successfully register worker")
+	if registerMapReply.NReduce <= 0 {
+		logr.WithFields(logr.Fields{"NReduce": registerMapReply.NReduce}).Error("Invalid params")
 		return
 	}
-	worker := WorkerStruct{pid, registerMapReply.Filename, mapf, reducef, registerMapReply.NReduce}
-	worker.executeMapTask()
-}
+	worker := WorkerStruct{pid, "", mapf, reducef, registerMapReply.NReduce, -1}
 
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+	// working on map task
+	for !worker.checkAllMapTaskFinish() {
+		if worker.getTaskFromCoordinator() {
+			intermediaFiles := worker.executeMapTask()
+			worker.reportMapTaskFinish(intermediaFiles)
+		}
+		time.Sleep(2 * time.Second)
 	}
+
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("Start to get reduce task")
 }
 
 //

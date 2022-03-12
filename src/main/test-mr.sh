@@ -71,16 +71,16 @@ rm -f mr-out*
 
 echo '***' Starting wc test.
 
-$TIMEOUT ../mrcoordinator ../pg*txt &
+$TIMEOUT ../mrcoordinator ../pg*txt | tee coordinator.log&
 pid=$!
 
 # give the coordinator time to create the sockets.
 sleep 1
 
 # start multiple workers.
-$TIMEOUT ../mrworker ../../mrapps/wc.so &
-$TIMEOUT ../mrworker ../../mrapps/wc.so &
-$TIMEOUT ../mrworker ../../mrapps/wc.so &
+$TIMEOUT ../mrworker ../../mrapps/wc.so | tee worker-1.log&
+$TIMEOUT ../mrworker ../../mrapps/wc.so | tee worker-2.log&
+$TIMEOUT ../mrworker ../../mrapps/wc.so | tee worker-3.log&
 
 # wait for the coordinator to exit.
 wait $pid

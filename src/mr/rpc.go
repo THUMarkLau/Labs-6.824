@@ -22,22 +22,41 @@ type ExampleReply struct {
 	Y int
 }
 
-type RegisterMapWorkerArgs struct {
+type RegisterWorkerArgs struct {
 	Pid int
 }
 
-type RegisterMapWorkerReply struct {
+type RegisterWorkerReply struct {
 	NReduce  int
-	Filename string
 }
 
-type ReportFinishMapTaskArgs struct {
+type CheckAllMapTaskFinishArgs struct {
+
+}
+
+type CheckAllMapTaskFinishReply struct {
+	AllTaskFinish bool
+}
+
+type GetMapTaskArgs struct {
 	Pid int
+}
+
+type GetMapTaskReply struct {
+	GetTask bool
+	Filename string
+	TaskId int
+}
+
+type ReportMapTaskFinishArgs struct {
+	Pid             int
+	TaskId			int
+	InputFile       string
 	IntermediaFiles []string
 }
 
-type ReportFinishMapTaskReply struct {
-
+type ReportMapTaskFinishReply struct {
+	TaskAccept bool
 }
 
 // Add your RPC definitions here.
