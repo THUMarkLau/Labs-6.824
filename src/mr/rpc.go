@@ -22,8 +22,25 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
+type RegisterMapWorkerArgs struct {
+	Pid int
+}
 
+type RegisterMapWorkerReply struct {
+	NReduce  int
+	Filename string
+}
+
+type ReportFinishMapTaskArgs struct {
+	Pid int
+	IntermediaFiles []string
+}
+
+type ReportFinishMapTaskReply struct {
+
+}
+
+// Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

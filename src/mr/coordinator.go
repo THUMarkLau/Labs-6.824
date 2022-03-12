@@ -1,15 +1,22 @@
 package mr
 
-import "log"
+import (
+	logr "github.com/sirupsen/logrus"
+	"log"
+	"sync"
+)
 import "net"
 import "os"
 import "net/rpc"
 import "net/http"
 
-
 type Coordinator struct {
 	// Your definitions here.
-
+	registerMutex    sync.Mutex
+	remainingFileIdx int
+	inputFiles       []string
+	fileToWorkerMap  map[string]int
+	reduceNum        int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -24,6 +31,24 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+func (c *Coordinator) RegisterMapWorker(args *RegisterMapWorkerArgs, reply *RegisterMapWorkerReply) error {
+	c.registerMutex.Lock()
+	reply.Filename = c.inputFiles[c.remainingFileIdx]
+	reply.NReduce = c.reduceNum
+	c.remainingFileIdx++
+	c.fileToWorkerMap[reply.Filename] = args.Pid
+	c.registerMutex.Unlock()
+	logr.WithFields(logr.Fields{
+		"worker": args.Pid,
+		"file":   reply.Filename,
+		"NReduce": c.reduceNum,
+	}).Info("Assign file to worker")
+	return nil
+}
+
+func (c*Coordinator) ReportFinishMapTask(args *ReportFinishMapTaskArgs, reply *ReportFinishMapTaskReply) error {
+	return nil
+}
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -50,20 +75,21 @@ func (c *Coordinator) Done() bool {
 
 	// Your code here.
 
-
 	return ret
 }
 
 //
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
-// nReduce is the number of reduce tasks to use.
+// NReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	mutex := sync.Mutex{}
+	c := Coordinator{
+		mutex, 0, files, make(map[string]int), nReduce,
+	}
 
 	// Your code here.
-
 
 	c.server()
 	return &c
