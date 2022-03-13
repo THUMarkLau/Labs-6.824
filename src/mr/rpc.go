@@ -27,11 +27,10 @@ type RegisterWorkerArgs struct {
 }
 
 type RegisterWorkerReply struct {
-	NReduce  int
+	NReduce int
 }
 
 type CheckAllMapTaskFinishArgs struct {
-
 }
 
 type CheckAllMapTaskFinishReply struct {
@@ -43,20 +42,49 @@ type GetMapTaskArgs struct {
 }
 
 type GetMapTaskReply struct {
-	GetTask bool
+	GetTask  bool
 	Filename string
-	TaskId int
+	TaskId   int
 }
 
 type ReportMapTaskFinishArgs struct {
 	Pid             int
-	TaskId			int
+	TaskId          int
 	InputFile       string
 	IntermediaFiles []string
 }
 
 type ReportMapTaskFinishReply struct {
 	TaskAccept bool
+}
+
+type CheckAllReduceTaskFinishArgs struct {
+}
+
+type CheckAllReduceTaskFinishRely struct {
+	AllTaskFinish bool
+}
+
+type GetReduceTaskArgs struct {
+	Pid int
+}
+
+type GetReduceTaskReply struct {
+	GetTask         bool
+	IntermediaFiles []string
+	TaskId          int
+	ReduceId        int
+}
+
+type ReportReduceTaskFinishArgs struct {
+	Pid        int
+	OutputFile string
+	ReduceId   int
+	TaskId     int
+}
+
+type ReportReduceTaskFinishReply struct {
+	TaskAccepted bool
 }
 
 // Add your RPC definitions here.

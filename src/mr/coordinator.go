@@ -20,9 +20,12 @@ type Coordinator struct {
 	FinishInputFiles         map[string]bool
 	IntermediaFilesForReduce map[int][]string
 	TaskInfo                 map[int]TaskInfo
-	reduceNum                int
+	ReduceNum                int
 	workingWorkers           map[int]bool
-	currentTaskId            int
+	CurrentTaskId            int
+	FinishReduceTaskNum      int
+	FreeReduceTask           map[int]bool
+	FinishReduceTask         map[int]bool
 }
 
 type TaskInfo struct {
@@ -30,10 +33,13 @@ type TaskInfo struct {
 	TaskId    int
 	IsMapTask bool
 	Filename  string
+	ReduceId  int
 	StartTime int64
 	Finish    bool
 	Abort     bool
 }
+
+var SLEEP_TIME = 10 * time.Second
 
 // Your code here -- RPC handlers for the worker to call.
 
@@ -51,7 +57,7 @@ func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *RegisterWo
 	c.mutex.Lock()
 	c.workingWorkers[args.Pid] = false
 	c.mutex.Unlock()
-	reply.NReduce = c.reduceNum
+	reply.NReduce = c.ReduceNum
 	return nil
 }
 
@@ -59,9 +65,9 @@ func (c *Coordinator) CheckAllMapTaskFinish(_ *CheckAllMapTaskFinishArgs, reply 
 	c.mutex.Lock()
 	reply.AllTaskFinish = c.FinishInputFileNum >= len(c.inputFiles)
 	logr.WithFields(logr.Fields{
-		"FinishTaskNum": c.FinishInputFileNum,
-		"totalFileNum" : len(c.inputFiles),
-		"allTaskFinished" : reply.AllTaskFinish,
+		"FinishTaskNum":   c.FinishInputFileNum,
+		"totalFileNum":    len(c.inputFiles),
+		"allTaskFinished": reply.AllTaskFinish,
 	}).Info("Check all map task finish")
 	c.mutex.Unlock()
 	return nil
@@ -75,7 +81,7 @@ func (c *Coordinator) GetMapTask(args *GetMapTaskArgs, reply *GetMapTaskReply) e
 			if c.FreeInputFiles[filename] {
 				// found a file to be assigned
 				reply.GetTask = true
-				reply.TaskId = c.currentTaskId
+				reply.TaskId = c.CurrentTaskId
 				reply.Filename = filename
 				c.FreeInputFiles[filename] = false
 				c.workingWorkers[args.Pid] = false
@@ -84,16 +90,17 @@ func (c *Coordinator) GetMapTask(args *GetMapTaskArgs, reply *GetMapTaskReply) e
 					reply.TaskId,
 					true,
 					filename,
+					-1,
 					time.Now().Unix(),
 					false,
 					false,
 				}
-				c.TaskInfo[c.currentTaskId] = taskInfo
-				c.currentTaskId++
+				c.TaskInfo[c.CurrentTaskId] = taskInfo
+				c.CurrentTaskId++
 
 				// start a go routine to check if the task should be aborted
 				go func(taskId int, c *Coordinator) {
-					time.Sleep(10 * time.Second)
+					time.Sleep(SLEEP_TIME)
 					c.mutex.Lock()
 					info := c.TaskInfo[taskId]
 					if !info.Finish {
@@ -141,18 +148,101 @@ func (c *Coordinator) ReportMapTaskFinish(args *ReportMapTaskFinishArgs, reply *
 		if !c.FinishInputFiles[args.InputFile] {
 			c.FinishInputFileNum++
 			c.FinishInputFiles[args.InputFile] = true
-			for i := 0; i < c.reduceNum; i++ {
+			for i := 0; i < c.ReduceNum; i++ {
 				c.IntermediaFilesForReduce[i] = append(c.IntermediaFilesForReduce[i], args.IntermediaFiles[i])
 			}
 		}
 
 		logr.WithFields(logr.Fields{
-			"WorkerId":args.Pid,
-			"TaskId":args.TaskId,
-			"Filename":args.InputFile,
-			"TotalFinishTaskNum":c.FinishInputFileNum,
-			"TotalFileNum":len(c.inputFiles),
+			"WorkerId":           args.Pid,
+			"TaskId":             args.TaskId,
+			"Filename":           args.InputFile,
+			"TotalFinishTaskNum": c.FinishInputFileNum,
+			"TotalFileNum":       len(c.inputFiles),
 		}).Info("Accept a finished task")
+	}
+	c.mutex.Unlock()
+	return nil
+}
+
+func (c *Coordinator) CheckAllReduceTaskFinish(_ *CheckAllReduceTaskFinishArgs, reply *CheckAllReduceTaskFinishRely) error {
+	c.mutex.Lock()
+	reply.AllTaskFinish = c.FinishReduceTaskNum >= c.ReduceNum
+	c.mutex.Unlock()
+	return nil
+}
+
+func (c *Coordinator) GetReduceTask(args *GetReduceTaskArgs, reply *GetReduceTaskReply) error {
+	c.mutex.Lock()
+	for i := 0; i < c.ReduceNum; i++ {
+		if c.FreeReduceTask[i] {
+			// found a not working reduce task
+			c.FreeReduceTask[i] = false
+			reply.GetTask = true
+			reply.TaskId = c.CurrentTaskId
+			reply.ReduceId = i
+			c.CurrentTaskId++
+			reply.IntermediaFiles = c.IntermediaFilesForReduce[i]
+			taskInfo := TaskInfo{}
+			taskInfo.TaskId = reply.TaskId
+			taskInfo.IsMapTask = false
+			taskInfo.WorkerId = args.Pid
+			taskInfo.ReduceId = i
+			taskInfo.StartTime = time.Now().Unix()
+			c.TaskInfo[reply.TaskId] = taskInfo
+			logr.WithFields(logr.Fields{
+				"WorkerId":        args.Pid,
+				"ReduceId":        i,
+				"IntermediaFiles": reply.IntermediaFiles,
+			}).Info("Assign a reduce task to worker")
+			// start a routine to check if the task is out of time
+			go func(coordinator *Coordinator, taskId int) {
+				time.Sleep(SLEEP_TIME)
+				c.mutex.Lock()
+				if !c.TaskInfo[taskId].Finish {
+					taskInfo := c.TaskInfo[taskId]
+					taskInfo.Abort = true
+					reduceId := taskInfo.ReduceId
+					c.TaskInfo[taskId] = taskInfo
+					c.FreeReduceTask[reduceId] = true
+					logr.WithFields(logr.Fields{
+						"WorkerId": taskInfo.WorkerId,
+						"ReduceId": reduceId,
+					}).Warn("Abort a reduce task because it is out of time")
+				}
+				c.mutex.Unlock()
+			}(c, reply.TaskId)
+			break
+		}
+	}
+	c.mutex.Unlock()
+	return nil
+}
+
+func (c *Coordinator) ReportReduceTaskFinish(args *ReportReduceTaskFinishArgs, reply *ReportReduceTaskFinishReply) error {
+	c.mutex.Lock()
+	{
+		taskInfo := c.TaskInfo[args.TaskId]
+		if taskInfo.Abort {
+			reply.TaskAccepted = false
+			logr.WithFields(logr.Fields{
+				"WorkerId": args.Pid,
+				"TaskId":   args.TaskId,
+			}).Warn("Reject a finished reduce task because it is out of time")
+		} else {
+			reply.TaskAccepted = true
+			if !c.FinishReduceTask[args.ReduceId] {
+				c.FinishReduceTask[args.ReduceId] = true
+				c.FinishReduceTaskNum++
+				taskInfo.Finish = true
+				c.TaskInfo[args.TaskId] = taskInfo
+				logr.WithFields(logr.Fields{
+					"WorkerId":                   args.Pid,
+					"ReduceId":                   args.ReduceId,
+					"TotalFinishReduceTaskCount": c.FinishReduceTaskNum,
+				}).Info("Accept a finished reduce task")
+			}
+		}
 	}
 	c.mutex.Unlock()
 	return nil
@@ -203,8 +293,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	intermediaFilesForReduce := make(map[int][]string)
+	freeReduceTask := make(map[int]bool)
 	for i := 0; i < nReduce; i++ {
 		intermediaFilesForReduce[i] = []string{}
+		freeReduceTask[i] = true
 	}
 
 	c := Coordinator{
@@ -218,6 +310,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		nReduce,
 		make(map[int]bool),
 		0,
+		0,
+		freeReduceTask,
+		make(map[int]bool),
 	}
 
 	// Your code here.

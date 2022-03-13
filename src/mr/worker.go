@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 import "log"
@@ -31,12 +32,14 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 type WorkerStruct struct {
-	Pid           int
-	Filename      string
-	mapf          func(string, string) []KeyValue
-	reducef       func(string, []string) string
-	nReduce       int
-	currentTaskId int
+	Pid               int
+	Filename          string
+	mapf              func(string, string) []KeyValue
+	reducef           func(string, []string) string
+	nReduce           int
+	currentTaskId     int
+	ReduceId          int
+	reduceSourceFiles []string
 }
 
 //
@@ -169,7 +172,6 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 		"WorkerId": worker.Pid,
 	}).Info("All data in map task is written into files")
 
-
 	for _, writer := range intermediateFiles {
 		writer.Close()
 	}
@@ -210,6 +212,78 @@ func (worker *WorkerStruct) reportMapTaskFinish(intermediaFiles []string) {
 	worker.currentTaskId = -1
 }
 
+func (worker *WorkerStruct) checkAllReduceTaskFinish() bool {
+	args := CheckAllReduceTaskFinishArgs{}
+	reply := CheckAllReduceTaskFinishRely{}
+
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("Checking if all reduce task finish")
+
+	call("Coordinator.CheckAllReduceTaskFinish", &args, &reply)
+
+	if reply.AllTaskFinish {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+		}).Info("All reduce tasks have been done, close the worker")
+	}
+
+	return reply.AllTaskFinish
+}
+
+func (worker *WorkerStruct) getReduceTask() bool {
+	args := GetReduceTaskArgs{worker.Pid}
+	reply := GetReduceTaskReply{}
+
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("Try to get reduce task from coordinator")
+
+	call("Coordinator.GetReduceTask", &args, &reply)
+
+	if !reply.GetTask {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+		}).Info("Fail to get reduce task from coordinator")
+	} else {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+			"TaskId":   reply.TaskId,
+			"ReduceId": reply.ReduceId,
+		}).Info("Get a reduce task from coordinator")
+	}
+
+	worker.currentTaskId = reply.TaskId
+	worker.reduceSourceFiles = reply.IntermediaFiles
+	worker.ReduceId = reply.ReduceId
+
+	return reply.GetTask
+}
+
+func (worker *WorkerStruct) executeReduceTask() {
+	keyValues := []KeyValue{}
+
+	for _, filename := range worker.reduceSourceFiles {
+		fileContent, _ := ioutil.ReadFile(filename)
+		fileLines := strings.Split(string(fileContent), "\n")
+		for _, fileLine := range fileLines {
+			if len(fileLine) <= 0 {
+				continue
+			}
+			keyValueSplit := strings.Split(fileLine, " ")
+			keyValues = append(keyValues, KeyValue{keyValueSplit[0], keyValueSplit[1]})
+		}
+	}
+
+	sort.Sort(ByKey(keyValues))
+
+	// TODO: Finish the reduce execution
+}
+
+func (worker *WorkerStruct) reportReduceTaskFinish() {
+
+}
+
 //
 // main/mrworker.go calls this function.
 //
@@ -237,7 +311,16 @@ func Worker(mapf func(string, string) []KeyValue,
 		logr.WithFields(logr.Fields{"NReduce": registerMapReply.NReduce}).Error("Invalid params")
 		return
 	}
-	worker := WorkerStruct{pid, "", mapf, reducef, registerMapReply.NReduce, -1}
+	worker := WorkerStruct{
+		pid,
+		"",
+		mapf,
+		reducef,
+		registerMapReply.NReduce,
+		-1,
+		0,
+		[]string{},
+	}
 
 	// working on map task
 	for !worker.checkAllMapTaskFinish() {
