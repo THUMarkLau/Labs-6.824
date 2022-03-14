@@ -40,6 +40,8 @@ type WorkerStruct struct {
 	currentTaskId     int
 	ReduceId          int
 	reduceSourceFiles []string
+	reduceTempFile    string
+	reduceOutputFile  string
 }
 
 //
@@ -76,7 +78,7 @@ func (worker *WorkerStruct) checkAllMapTaskFinish() bool {
 	return reply.AllTaskFinish
 }
 
-func (worker *WorkerStruct) getTaskFromCoordinator() bool {
+func (worker *WorkerStruct) getMapTask() bool {
 	logr.WithFields(logr.Fields{
 		"WorkerId": worker.Pid,
 	}).Info("Try to get map task from coordinator")
@@ -261,6 +263,13 @@ func (worker *WorkerStruct) getReduceTask() bool {
 }
 
 func (worker *WorkerStruct) executeReduceTask() {
+	// first step
+	// read the data from intermedia files, and sort them
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+		"TaskId":   worker.currentTaskId,
+		"ReduceId": worker.ReduceId,
+	}).Info("start to read data from intermedia files")
 	keyValues := []KeyValue{}
 
 	for _, filename := range worker.reduceSourceFiles {
@@ -277,11 +286,123 @@ func (worker *WorkerStruct) executeReduceTask() {
 
 	sort.Sort(ByKey(keyValues))
 
-	// TODO: Finish the reduce execution
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+		"TaskId":   worker.currentTaskId,
+		"ReduceId": worker.ReduceId,
+	}).Info("Finish reading from intermedia files, start to execute reduce function")
+	// second step
+	// group the data, and put them into reduce function
+	// and write the output to the file
+	outputFileName := strconv.Itoa(worker.Pid) + "-mr-out-" + strconv.Itoa(worker.ReduceId)
+	worker.reduceTempFile = outputFileName
+	worker.reduceOutputFile = "mr-out-" + strconv.Itoa(worker.ReduceId)
+	ofile, _ := os.Create(outputFileName)
+	defer ofile.Close()
+	totalSize := len(keyValues)
+	for i := 0; i < totalSize; {
+		values := []string{}
+		j := i
+		for j < totalSize && keyValues[j].Key == keyValues[i].Key {
+			values = append(values, keyValues[j].Value)
+			j++
+		}
+		output := worker.reducef(keyValues[i].Key, values)
+		fmt.Fprintf(ofile, "%v %v\n", keyValues[i].Key, output)
+		i = j
+	}
+
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+		"TaskId":   worker.currentTaskId,
+		"ReduceId": worker.ReduceId,
+	}).Info("Reduce function execute success.")
 }
 
 func (worker *WorkerStruct) reportReduceTaskFinish() {
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+		"TaskId":   worker.currentTaskId,
+		"ReduceId": worker.ReduceId,
+	}).Info("Report task finish to coordinator")
 
+	args := ReportReduceTaskFinishArgs{
+		worker.Pid,
+		worker.reduceOutputFile,
+		worker.ReduceId,
+		worker.currentTaskId,
+	}
+
+	reply := ReportReduceTaskFinishReply{}
+
+	call("Coordinator.ReportReduceTaskFinish", &args, &reply)
+
+	if reply.TaskAccepted {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+			"TaskId":   worker.currentTaskId,
+			"ReduceId": worker.ReduceId,
+			"TempFile": worker.reduceTempFile,
+			"OutputFile":worker.reduceOutputFile,
+		}).Info("Task is accepted, rename temp file to final output file")
+		err := os.Rename(worker.reduceTempFile, worker.reduceOutputFile)
+		if err == nil {
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"TaskId":   worker.currentTaskId,
+				"ReduceId": worker.ReduceId,
+				"TempFile": worker.reduceTempFile,
+				"OutputFile":worker.reduceOutputFile,
+			}).Info("Successfully rename temp file to final output file")
+		} else {
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"TaskId":   worker.currentTaskId,
+				"ReduceId": worker.ReduceId,
+				"TempFile": worker.reduceTempFile,
+				"OutputFile":worker.reduceOutputFile,
+			}).Error("Failed to rename temp file to final output file", err)
+			worker.reportReduceTaskFail()
+		}
+	} else {
+		logr.WithFields(logr.Fields{
+			"WorkerId": worker.Pid,
+			"TaskId":   worker.currentTaskId,
+			"ReduceId": worker.ReduceId,
+			"TempFile": worker.reduceTempFile,
+		}).Warn("Task is not accepted, remove temp file")
+		err := os.Remove(worker.reduceTempFile)
+		if err != nil {
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"TaskId":   worker.currentTaskId,
+				"ReduceId": worker.ReduceId,
+				"TempFile": worker.reduceTempFile,
+				"OutputFile":worker.reduceOutputFile,
+			}).Error("Failed to delete temp file", err)
+		} else {
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"TaskId":   worker.currentTaskId,
+				"ReduceId": worker.ReduceId,
+				"TempFile": worker.reduceTempFile,
+				"OutputFile":worker.reduceOutputFile,
+			}).Info("Success delete temp file", err)
+		}
+	}
+
+}
+
+func (worker *WorkerStruct) reportReduceTaskFail() {
+	args := ReportReduceTaskFailArgs{
+		worker.Pid,
+		worker.ReduceId,
+		worker.reduceOutputFile,
+	}
+
+	reply := ReportReduceTaskFailReply{}
+
+	call("Coordinator.ReportReduceTaskFail", &args, &reply)
 }
 
 //
@@ -320,11 +441,13 @@ func Worker(mapf func(string, string) []KeyValue,
 		-1,
 		0,
 		[]string{},
+		"",
+		"",
 	}
 
 	// working on map task
 	for !worker.checkAllMapTaskFinish() {
-		if worker.getTaskFromCoordinator() {
+		if worker.getMapTask() {
 			intermediaFiles := worker.executeMapTask()
 			worker.reportMapTaskFinish(intermediaFiles)
 		}
@@ -334,6 +457,18 @@ func Worker(mapf func(string, string) []KeyValue,
 	logr.WithFields(logr.Fields{
 		"WorkerId": worker.Pid,
 	}).Info("Start to get reduce task")
+
+	// working on reduce task
+	for !worker.checkAllReduceTaskFinish() {
+		if worker.getReduceTask() {
+			worker.executeReduceTask()
+			worker.reportReduceTaskFinish()
+		}
+	}
+
+	logr.WithFields(logr.Fields{
+		"WorkerId": worker.Pid,
+	}).Info("No more task, terminate the worker")
 }
 
 //

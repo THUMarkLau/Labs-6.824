@@ -248,6 +248,20 @@ func (c *Coordinator) ReportReduceTaskFinish(args *ReportReduceTaskFinishArgs, r
 	return nil
 }
 
+func (c *Coordinator) ReportReduceTaskFail(args *ReportReduceTaskFailArgs, reply *ReportReduceTaskFailReply) error {
+	c.mutex.Lock()
+	{
+		logr.WithFields(logr.Fields{
+			"WorkerId":args.WorkerId,
+			"ReduceId":args.ReduceId,
+		}).Warn("Accept a report of reduce fail task")
+		c.FinishReduceTask[args.ReduceId] = false
+		c.FreeReduceTask[args.ReduceId] = true
+		c.FinishReduceTaskNum--
+	}
+	defer c.mutex.Unlock()
+	return nil
+}
 //
 // start a thread that listens for RPCs from worker.go
 //

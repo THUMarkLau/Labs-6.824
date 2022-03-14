@@ -87,6 +87,15 @@ type ReportReduceTaskFinishReply struct {
 	TaskAccepted bool
 }
 
+type ReportReduceTaskFailArgs struct {
+	WorkerId int
+	ReduceId int
+	OutputFile string
+}
+
+type ReportReduceTaskFailReply struct {
+
+}
 // Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
