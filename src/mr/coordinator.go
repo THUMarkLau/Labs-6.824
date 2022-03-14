@@ -111,12 +111,6 @@ func (c *Coordinator) GetMapTask(args *GetMapTaskArgs, reply *GetMapTaskReply) e
 							"WorkerId": info.WorkerId,
 							"Filename": info.Filename,
 						}).Info("Abort a task because it is out of time")
-					} else {
-						logr.WithFields(logr.Fields{
-							"TaskId":   info.TaskId,
-							"WorkerId": info.WorkerId,
-							"Filename": info.Filename,
-						}).Info("Task is finish, not need to abort it")
 					}
 					c.mutex.Unlock()
 				}(taskInfo.TaskId, c)
@@ -328,6 +322,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		freeReduceTask,
 		make(map[int]bool),
 	}
+	logr.Info("Coordinator start to work")
 
 	// Your code here.
 

@@ -154,9 +154,10 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 		_, err := fileWriter.Write([]byte(tempStr))
 		if err != nil {
 			logr.Error(err)
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
-		} else {
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Info("Write map intermediate output tot this file")
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"Filename": intermediateFileNames[currentFileIdx],
+			}).Error("Failed to write map output to this file")
 		}
 		tempStr = ""
 		i = j + 1
@@ -165,9 +166,10 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 	if tempStr != "" {
 		err := ioutil.WriteFile(intermediateFileNames[currentFileIdx], []byte(tempStr), fs.ModePerm)
 		if err != nil {
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
-		} else {
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Info("Write map intermediate output tot this file")
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"Filename": intermediateFileNames[currentFileIdx],
+			}).Error("Failed to write map output to this file")
 		}
 	}
 	logr.WithFields(logr.Fields{
@@ -339,30 +341,33 @@ func (worker *WorkerStruct) reportReduceTaskFinish() {
 
 	if reply.TaskAccepted {
 		logr.WithFields(logr.Fields{
-			"WorkerId": worker.Pid,
-			"TaskId":   worker.currentTaskId,
-			"ReduceId": worker.ReduceId,
-			"TempFile": worker.reduceTempFile,
-			"OutputFile":worker.reduceOutputFile,
+			"WorkerId":   worker.Pid,
+			"TaskId":     worker.currentTaskId,
+			"ReduceId":   worker.ReduceId,
+			"TempFile":   worker.reduceTempFile,
+			"OutputFile": worker.reduceOutputFile,
 		}).Info("Task is accepted, rename temp file to final output file")
 		err := os.Rename(worker.reduceTempFile, worker.reduceOutputFile)
 		if err == nil {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Info("Successfully rename temp file to final output file")
 		} else {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Error("Failed to rename temp file to final output file", err)
 			worker.reportReduceTaskFail()
+		}
+		for _, intermediaFile := range worker.reduceSourceFiles {
+			os.Remove(intermediaFile)
 		}
 	} else {
 		logr.WithFields(logr.Fields{
@@ -374,19 +379,19 @@ func (worker *WorkerStruct) reportReduceTaskFinish() {
 		err := os.Remove(worker.reduceTempFile)
 		if err != nil {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Error("Failed to delete temp file", err)
 		} else {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Info("Success delete temp file", err)
 		}
 	}
