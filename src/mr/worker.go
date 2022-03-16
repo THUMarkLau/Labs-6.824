@@ -2,6 +2,7 @@ package mr
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"io/ioutil"
 	"os"
@@ -155,8 +156,6 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 		if err != nil {
 			logr.Error(err)
 			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
-		} else {
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Info("Write map intermediate output tot this file")
 		}
 		tempStr = ""
 		i = j + 1
@@ -166,8 +165,6 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 		err := ioutil.WriteFile(intermediateFileNames[currentFileIdx], []byte(tempStr), fs.ModePerm)
 		if err != nil {
 			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
-		} else {
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Info("Write map intermediate output tot this file")
 		}
 	}
 	logr.WithFields(logr.Fields{
@@ -339,28 +336,28 @@ func (worker *WorkerStruct) reportReduceTaskFinish() {
 
 	if reply.TaskAccepted {
 		logr.WithFields(logr.Fields{
-			"WorkerId": worker.Pid,
-			"TaskId":   worker.currentTaskId,
-			"ReduceId": worker.ReduceId,
-			"TempFile": worker.reduceTempFile,
-			"OutputFile":worker.reduceOutputFile,
+			"WorkerId":   worker.Pid,
+			"TaskId":     worker.currentTaskId,
+			"ReduceId":   worker.ReduceId,
+			"TempFile":   worker.reduceTempFile,
+			"OutputFile": worker.reduceOutputFile,
 		}).Info("Task is accepted, rename temp file to final output file")
 		err := os.Rename(worker.reduceTempFile, worker.reduceOutputFile)
 		if err == nil {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Info("Successfully rename temp file to final output file")
 		} else {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Error("Failed to rename temp file to final output file", err)
 			worker.reportReduceTaskFail()
 		}
@@ -374,19 +371,19 @@ func (worker *WorkerStruct) reportReduceTaskFinish() {
 		err := os.Remove(worker.reduceTempFile)
 		if err != nil {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Error("Failed to delete temp file", err)
 		} else {
 			logr.WithFields(logr.Fields{
-				"WorkerId": worker.Pid,
-				"TaskId":   worker.currentTaskId,
-				"ReduceId": worker.ReduceId,
-				"TempFile": worker.reduceTempFile,
-				"OutputFile":worker.reduceOutputFile,
+				"WorkerId":   worker.Pid,
+				"TaskId":     worker.currentTaskId,
+				"ReduceId":   worker.ReduceId,
+				"TempFile":   worker.reduceTempFile,
+				"OutputFile": worker.reduceOutputFile,
 			}).Info("Success delete temp file", err)
 		}
 	}
@@ -411,6 +408,20 @@ func (worker *WorkerStruct) reportReduceTaskFail() {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	pid := unix.Getpid()
+
+	logFileName := "worker-" + strconv.Itoa(pid)
+	logFile, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		logr.WithFields(logr.Fields{
+			"Filename": logFileName,
+			"Pid": pid,
+		}).Error("Failed to open log file", err)
+	} else {
+		defer logFile.Close()
+		out := io.MultiWriter(logFile, os.Stdout)
+		logr.SetOutput(out)
+		logr.SetFormatter(&logr.JSONFormatter{})
+	}
 
 	registerMapArgs := RegisterWorkerArgs{pid}
 	registerMapReply := RegisterWorkerReply{}

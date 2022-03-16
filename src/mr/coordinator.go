@@ -2,6 +2,7 @@ package mr
 
 import (
 	logr "github.com/sirupsen/logrus"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -40,7 +41,6 @@ type TaskInfo struct {
 }
 
 var SLEEP_TIME = 10 * time.Second
-
 // Your code here -- RPC handlers for the worker to call.
 
 //
@@ -283,11 +283,9 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
 
 	// Your code here.
-
-	return ret
+	return c.FinishReduceTaskNum >= c.ReduceNum
 }
 
 //
@@ -297,6 +295,18 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// log settings
+	logFileName := "coordinator.log"
+	logFile, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		logr.WithFields(logr.Fields{
+			"Filename": logFileName,
+		}).Error("Failed to open log file", err)
+	} else {
+		defer logFile.Close()
+		out := io.MultiWriter(logFile, os.Stdout)
+		logr.SetOutput(out)
+		logr.SetFormatter(&logr.JSONFormatter{})
+	}
 
 	mutex := sync.Mutex{}
 	freeFiles := make(map[string]bool)
@@ -328,6 +338,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		freeReduceTask,
 		make(map[int]bool),
 	}
+
+	logr.Info("Coordinator start to work")
 
 	// Your code here.
 
