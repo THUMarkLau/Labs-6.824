@@ -154,8 +154,10 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 		fileWriter := intermediateFiles[fileIdx]
 		_, err := fileWriter.Write([]byte(tempStr))
 		if err != nil {
-			logr.Error(err)
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"Filename": intermediateFileNames[currentFileIdx],
+			}).Error("Failed to write map output to this file")
 		}
 		tempStr = ""
 		i = j + 1
@@ -164,7 +166,10 @@ func (worker *WorkerStruct) writeMapResultToFile(keyValues []KeyValue) []string 
 	if tempStr != "" {
 		err := ioutil.WriteFile(intermediateFileNames[currentFileIdx], []byte(tempStr), fs.ModePerm)
 		if err != nil {
-			logr.WithFields(logr.Fields{"WorkerId": worker.Pid, "Filename": intermediateFileNames[currentFileIdx]}).Error("Failed to write map output to this file")
+			logr.WithFields(logr.Fields{
+				"WorkerId": worker.Pid,
+				"Filename": intermediateFileNames[currentFileIdx],
+			}).Error("Failed to write map output to this file")
 		}
 	}
 	logr.WithFields(logr.Fields{
@@ -360,6 +365,9 @@ func (worker *WorkerStruct) reportReduceTaskFinish() {
 				"OutputFile": worker.reduceOutputFile,
 			}).Error("Failed to rename temp file to final output file", err)
 			worker.reportReduceTaskFail()
+		}
+		for _, intermediaFile := range worker.reduceSourceFiles {
+			os.Remove(intermediaFile)
 		}
 	} else {
 		logr.WithFields(logr.Fields{
