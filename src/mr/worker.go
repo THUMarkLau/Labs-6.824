@@ -302,6 +302,12 @@ func (worker *WorkerStruct) executeReduceTask() {
 	ofile, _ := os.Create(outputFileName)
 	defer ofile.Close()
 	totalSize := len(keyValues)
+
+	logr.WithFields(logr.Fields{
+		"KVSIZE" : totalSize,
+		"REDUCE_ID" : worker.ReduceId,
+	}).Error("TTTTTEEEESSSSTTTT")
+
 	for i := 0; i < totalSize; {
 		values := []string{}
 		j := i
@@ -417,7 +423,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	pid := unix.Getpid()
 
-	logFileName := "worker-" + strconv.Itoa(pid)
+	logFileName := "worker-" + strconv.Itoa(pid) + ".log"
 	logFile, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		logr.WithFields(logr.Fields{
@@ -426,9 +432,9 @@ func Worker(mapf func(string, string) []KeyValue,
 		}).Error("Failed to open log file", err)
 	} else {
 		defer logFile.Close()
-		out := io.MultiWriter(logFile, os.Stdout)
+		//out := io.MultiWriter(logFile, os.Stdout)
+		out := io.MultiWriter(logFile)
 		logr.SetOutput(out)
-		logr.SetFormatter(&logr.JSONFormatter{})
 	}
 
 	registerMapArgs := RegisterWorkerArgs{pid}

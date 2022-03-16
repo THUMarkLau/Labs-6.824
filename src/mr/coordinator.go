@@ -253,7 +253,7 @@ func (c *Coordinator) ReportReduceTaskFail(args *ReportReduceTaskFailArgs, reply
 		c.FreeReduceTask[args.ReduceId] = true
 		c.FinishReduceTaskNum--
 	}
-	defer c.mutex.Unlock()
+	c.mutex.Unlock()
 	return nil
 }
 //
@@ -279,6 +279,8 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 
 	// Your code here.
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	return c.FinishReduceTaskNum >= c.ReduceNum
 }
 
@@ -296,10 +298,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			"Filename": logFileName,
 		}).Error("Failed to open log file", err)
 	} else {
-		defer logFile.Close()
-		out := io.MultiWriter(logFile, os.Stdout)
+		//out := io.MultiWriter(logFile, os.Stdout)
+		out := io.MultiWriter(logFile)
 		logr.SetOutput(out)
-		logr.SetFormatter(&logr.JSONFormatter{})
 	}
 
 	mutex := sync.Mutex{}
@@ -332,8 +333,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		freeReduceTask,
 		make(map[int]bool),
 	}
-	logr.Info("Coordinator start to work")
-
 	logr.Info("Coordinator start to work")
 
 	// Your code here.
